@@ -1,0 +1,132 @@
+name: Voice AI Coding Prototype CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  AWS_REGION: us-east-1
+  STACK_NAME: voice-ai-coding-prototype
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install -r src/requirements.txt
+        pip install -r tests/requirements.txt
+    
+    - name: Run unit tests
+      run: pytest tests/unit/ -v --tb=short
+    
+    - name: Security scan
+      run: |
+        pip install bandit safety
+        bandit -r src/ -f json -o security-report.json || true
+        safety check --json --output safety-report.json || true
+    
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-reports
+        path: |
+          security-report.json
+          safety-report.json
+
+  deploy-dev:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+    environment: development
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+    
+    - name: Set up SAM CLI
+      uses: aws-actions/setup-sam@v2
+    
+    - name: Deploy to development
+      run: |
+        cd infrastructure
+        sam build
+        sam deploy \
+          --stack-name ${{ env.STACK_NAME }}-dev \
+          --region ${{ env.AWS_REGION }} \
+          --capabilities CAPABILITY_IAM \
+          --parameter-overrides Environment=dev \
+          --no-confirm-changeset
+    
+    - name: Run integration tests
+      run: |
+        API_ENDPOINT=$(aws cloudformation describe-stacks \
+          --stack-name ${{ env.STACK_NAME }}-dev \
+          --region ${{ env.AWS_REGION }} \
+          --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' \
+          --output text)
+        export API_ENDPOINT
+        pytest tests/integration/ -v --tb=short
+
+  deploy-prod:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+    
+    - name: Set up SAM CLI
+      uses: aws-actions/setup-sam@v2
+    
+    - name: Deploy to production
+      run: |
+        cd infrastructure
+        sam build
+        sam deploy \
+          --stack-name ${{ env.STACK_NAME }}-prod \
+          --region ${{ env.AWS_REGION }} \
+          --capabilities CAPABILITY_IAM \
+          --parameter-overrides Environment=prod \
+          --no-confirm-changeset
+    
+    - name: Deploy website
+      run: |
+        WEBSITE_BUCKET=$(aws cloudformation describe-stacks \
+          --stack-name ${{ env.STACK_NAME }}-prod \
+          --region ${{ env.AWS_REGION }} \
+          --query 'Stacks[0].Outputs[?OutputKey==`WebsiteBucket`].OutputValue' \
+          --output text)
+        
+        API_ENDPOINT=$(aws cloudformation describe-stacks \
+          --stack-name ${{ env.STACK_NAME }}-prod \
+          --region ${{ env.AWS_REGION }} \
+          --query 'Stacks[0].Outputs[?OutputKey==`ApiEndpoint`].OutputValue' \
+          --output text)
+        
+        sed "s|placeholder=\"https://your-api-gateway-url/dev/process-voice\"|value=\"$API_ENDPOINT/process-voice\"|g" test_client.html > index.html
+        aws s3 cp index.html s3://$WEBSITE_BUCKET/index.html

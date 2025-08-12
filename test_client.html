@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice AI Coding Assistant</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .record-btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 10px 0;
+        }
+        .record-btn:hover { background: #0056b3; }
+        .record-btn.recording { background: #dc3545; }
+        .status { margin: 15px 0; padding: 10px; border-radius: 6px; }
+        .status.info { background: #d1ecf1; color: #0c5460; }
+        .status.success { background: #d4edda; color: #155724; }
+        .status.error { background: #f8d7da; color: #721c24; }
+        .conversation { margin-top: 20px; }
+        .message { margin: 10px 0; padding: 15px; border-radius: 8px; }
+        .user { background: #e3f2fd; }
+        .assistant { background: #f3e5f5; }
+        .config { margin-bottom: 20px; }
+        .config input { width: 100%; padding: 8px; margin: 5px 0; border: 1px solid #ddd; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 Voice AI Coding Assistant</h1>
+        <p>Speak your coding questions and get expert advice!</p>
+        
+        <div class="config">
+            <label>API Endpoint:</label>
+            <input type="text" id="apiEndpoint" placeholder="https://your-api-gateway-url/dev/process-voice">
+        </div>
+        
+        <button id="recordBtn" class="record-btn">🎤 Start Recording</button>
+        <div id="status" class="status info">Ready to record. Click the button and speak your question.</div>
+        
+        <div id="conversation" class="conversation"></div>
+    </div>
+
+    <script>
+        let mediaRecorder;
+        let audioChunks = [];
+        let isRecording = false;
+        let sessionId = generateSessionId();
+
+        const recordBtn = document.getElementById('recordBtn');
+        const status = document.getElementById('status');
+        const conversation = document.getElementById('conversation');
+        const apiEndpoint = document.getElementById('apiEndpoint');
+
+        recordBtn.addEventListener('click', toggleRecording);
+
+        function generateSessionId() {
+            return 'session_' + Math.random().toString(36).substr(2, 9);
+        }
+
+        async function toggleRecording() {
+            if (!isRecording) {
+                await startRecording();
+            } else {
+                stopRecording();
+            }
+        }
+
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+
+                mediaRecorder.ondataavailable = event => {
+                    audioChunks.push(event.data);
+                };
+
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                    await processAudio(audioBlob);
+                };
+
+                mediaRecorder.start();
+                isRecording = true;
+                recordBtn.textContent = '⏹️ Stop Recording';
+                recordBtn.classList.add('recording');
+                updateStatus('Recording... Speak your question now.', 'info');
+
+            } catch (error) {
+                updateStatus('Error accessing microphone: ' + error.message, 'error');
+            }
+        }
+
+        function stopRecording() {
+            if (mediaRecorder && isRecording) {
+                mediaRecorder.stop();
+                mediaRecorder.stream.getTracks().forEach(track => track.stop());
+                isRecording = false;
+                recordBtn.textContent = '🎤 Start Recording';
+                recordBtn.classList.remove('recording');
+                updateStatus('Processing your request...', 'info');
+            }
+        }
+
+        async function processAudio(audioBlob) {
+            try {
+                const endpoint = apiEndpoint.value.trim();
+                if (!endpoint) {
+                    updateStatus('Please enter the API endpoint URL', 'error');
+                    return;
+                }
+
+                // Convert audio to base64
+                const arrayBuffer = await audioBlob.arrayBuffer();
+                const base64Audio = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        session_id: sessionId,
+                        audio_data: base64Audio
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const result = await response.json();
+                
+                // Add to conversation
+                addMessage('user', result.user_input || 'Audio processed');
+                addMessage('assistant', result.ai_response);
+                
+                // Play response audio if available
+                if (result.audio_url) {
+                    playAudio(result.audio_url);
+                }
+                
+                updateStatus('Response received! 🎉', 'success');
+
+            } catch (error) {
+                updateStatus('Error processing audio: ' + error.message, 'error');
+                console.error('Processing error:', error);
+            }
+        }
+
+        function addMessage(sender, text) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}`;
+            messageDiv.innerHTML = `<strong>${sender === 'user' ? 'You' : 'AI Assistant'}:</strong> ${text}`;
+            conversation.appendChild(messageDiv);
+            conversation.scrollTop = conversation.scrollHeight;
+        }
+
+        function playAudio(url) {
+            const audio = new Audio(url);
+            audio.play().catch(error => {
+                console.error('Error playing audio:', error);
+            });
+        }
+
+        function updateStatus(message, type) {
+            status.textContent = message;
+            status.className = `status ${type}`;
+        }
+
+        // Check for browser support
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            updateStatus('Your browser does not support audio recording', 'error');
+            recordBtn.disabled = true;
+        }
+    </script>
+</body>
+</html>
