@@ -3,7 +3,7 @@
 An MVP for conversational AI pair programming that elevates developers of any skill level.
 
 ## Vision
-Create a voice-interactive AI assistant that not only generates code but actively improves developer requests, identifies security issues, suggests best practices, and asks clarifying questions to ensure high-quality, extensible solutions.
+Create a first gen prototype for a voice-interactive AI assistant that not only generates code but actively improves developer requests, identifies security issues, suggests best practices, and asks clarifying questions to ensure high-quality, extensible solutions.
 
 ## Key Features
 - **Voice-First Interface**: Natural conversation with AI
